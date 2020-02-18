@@ -20,6 +20,42 @@
 // Other includes.
 #include "CLHEP/Units/SystemOfUnits.h"
 
+
+typedef std::tuple<std::vector<double>, std::vector<double>, std::vector<double> > calo_t;
+
+calo_t condense_calo(calo_t oldcalo, double step_limit=0.5){ // default 0.5cm
+  std::vector<double> old_dE, old_dx, old_currLen; 
+  std::tie(old_dE, old_dx, old_currLen) = oldcalo;
+
+  std::vector<double> new_dE, new_dx, new_currLen;
+  double sumEnergy=0, sumLength=0;
+  for(size_t i=0; i<old_dE.size(); i++) {
+    sumEnergy += old_dE.at(i);    
+    sumLength += old_dx.at(i);    
+    if (sumLength > step_limit) {
+      new_dE.push_back(sumEnergy);
+      new_dx.push_back(sumLength);
+      new_currLen.push_back(old_currLen.at(i));
+      sumEnergy = 0.;
+      sumLength = 0.;
+    }
+  }
+
+  // clear up the remaining steps shorter than the step limit
+  if (sumLength>0){
+      new_dE.push_back(sumEnergy);
+      new_dx.push_back(sumLength);
+      double current_length=sumLength;
+      if (not new_currLen.empty()) 
+        current_length += new_currLen.back();
+      new_currLen.push_back(current_length);
+      sumEnergy = 0.;
+      sumLength = 0.;
+  }
+
+  return std::make_tuple(new_dE, new_dx, new_currLen);
+}
+
 using namespace std;
 namespace larg4 {
     class CheckSimEnergyDeposit;
@@ -64,6 +100,7 @@ void larg4::CheckSimEnergyDeposit::beginJob()
   _hSteplengthRR= tfs->make<TH2F>("hSteplengthRR", "StepLength vs. RR", 240,0,120, 200,0,1.0);
 } // end beginJob
 
+
 void larg4::CheckSimEnergyDeposit::analyze(const art::Event& event)
 {
   std::vector<art::Handle<sim::SimEnergyDepositCollection>> allSims;
@@ -97,7 +134,7 @@ void larg4::CheckSimEnergyDeposit::analyze(const art::Event& event)
     // _hLandauPhotons->Fill(sumPhotons);
     // _hLandauEdep->Fill(sumE);
 
-    vector<double> dE, dx, l0;
+    vector<double> dE, dx, currLen; // dE, dx and current length for a step
     double sumLength(0);
     for (auto const& hit : *sims) {
       int trkId = hit.TrackID();
@@ -115,16 +152,19 @@ void larg4::CheckSimEnergyDeposit::analyze(const art::Event& event)
       sumLength += l;
       dE.push_back(e);
       dx.push_back(l);
-      l0.push_back(sumLength);
+      currLen.push_back(sumLength);
     } // end a simEnergyDeposit
 
-    double totalLength = l0.back();
     if (has_reinteraction_proton) continue;
-    for(size_t i=0; i<dE.size(); i++){
-      double res_range = totalLength - l0.at(i);
-      if(res_range>120) std::cout << res_range << " " << dE.at(i)/dx.at(i) << std::endl;
-      _hdEdxRR->Fill(res_range, dE.at(i)/dx.at(i));
-      _hSteplengthRR->Fill(res_range, dx.at(i));
+
+    double totalLength = sumLength;
+    auto [new_dE, new_dx, new_currLen] = condense_calo(std::make_tuple(dE,dx,currLen));
+
+    for(size_t i=0; i<new_dE.size(); i++){
+      double res_range = totalLength - new_currLen.at(i);
+      if(res_range>120) std::cout << res_range << " " << new_dE.at(i)/new_dx.at(i) << std::endl;
+      _hdEdxRR->Fill(res_range, new_dE.at(i)/new_dx.at(i));
+      _hSteplengthRR->Fill(res_range, new_dx.at(i));
     }
   } // end simEnergyDeposits
 } // end analyze
