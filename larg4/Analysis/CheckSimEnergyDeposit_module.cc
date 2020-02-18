@@ -11,6 +11,7 @@
 
 // Root includes.
 #include "TH1F.h"
+#include "TH2F.h"
 #include "TNtuple.h"
 
 // STL includes.
@@ -39,6 +40,8 @@ private:
   TH1F* _hLandauPhotons{nullptr}; // Edep/cm  SimEnergyDepositHits
   TH1F* _hLandauEdep{nullptr};    // number of Photons/cm SimEnergyDepositHits
   TH1F* _hSteplength{nullptr};    // Geant 4 step length
+  TH2F* _hdEdxRR{nullptr};    // dE/dx vs residual range
+  TH2F* _hSteplengthRR{nullptr};    // step length vs residual range
   TNtuple* _ntuple{nullptr};
 };
 
@@ -54,42 +57,76 @@ void larg4::CheckSimEnergyDeposit::beginJob()
   _hnumPhotons = tfs->make<TH1F>("hnumPhotons", "number of photons per  SimEnergyDeposit", 100,0.,500.);
   _hLandauPhotons= tfs->make<TH1F>("hLandauPhotons", "number of photons/cm", 100,0.,2000000.);
   _hLandauEdep= tfs->make<TH1F>("hLandauEdep", "Edep/cm", 100,0.,10.);
-  _hSteplength= tfs->make<TH1F>("hSteplength", "geant 4 step length", 100,0.,0.05);
+  _hSteplength= tfs->make<TH1F>("hSteplength", "geant 4 step length", 200,0.,1.0);
   _ntuple = tfs->make<TNtuple>("ntuple","Demo ntuple",
                                "Event:Edep:em_Edep:nonem_Edep:xpos:ypos:zpos:time");
+  _hdEdxRR= tfs->make<TH2F>("hdEdxRR", "dEdx vs. RR", 240,0,120, 300,0,15);
+  _hSteplengthRR= tfs->make<TH2F>("hSteplengthRR", "StepLength vs. RR", 240,0,120, 200,0,1.0);
 } // end beginJob
 
 void larg4::CheckSimEnergyDeposit::analyze(const art::Event& event)
 {
   std::vector<art::Handle<sim::SimEnergyDepositCollection>> allSims;
   event.getManyByType(allSims);
+
+  bool has_reinteraction_proton = false;
   for (auto const& sims : allSims) {
-    double sumPhotons=0.0;
-    double sumE = 0.0;
-    _hnHits->Fill(sims->size());
+    // double sumPhotons=0.0;
+    // double sumE = 0.0;
+    // _hnHits->Fill(sims->size());
+    // for (auto const& hit : *sims) {
+    //   // sum up energy deposit in a 1cm slice of liquid Argon.
+    //   if (std::abs(hit.EndZ())<0.5) {
+    //     sumPhotons= sumPhotons + hit.NumPhotons();
+    //     sumE= sumE +hit.Energy();
+    //   }
+    //   _hnumPhotons->Fill( hit.NumPhotons());
+    //   _hEdep->Fill( hit.Energy());   // energy deposit in MeV
+    //   _hSteplength->Fill( hit.StepLength()); // step length in cm
+    //   /*
+    //     _ntuple->Fill(event.event(),
+    //     hit.GetEdep(),
+    //     hit.GetEdepEM(),
+    //     hit.GetEdepnonEM(),
+    //     hit.GetXpos(),
+    //     hit.GetYpos(),
+    //     hit.GetZpos(),
+    //     hit.GetTime());
+    //   */
+    // }
+    // _hLandauPhotons->Fill(sumPhotons);
+    // _hLandauEdep->Fill(sumE);
+
+    vector<double> dE, dx, l0;
+    double sumLength(0);
     for (auto const& hit : *sims) {
-      // sum up energy deposit in a 1cm slice of liquid Argon.
-      if (std::abs(hit.EndZ())<0.5) {
-        sumPhotons= sumPhotons + hit.NumPhotons();
-        sumE= sumE +hit.Energy();
+      int trkId = hit.TrackID();
+      int pdg = hit.PdgCode();
+      if (pdg!=2212) continue; // only care about proton
+      if (trkId>1) {
+        has_reinteraction_proton = true;
+        break; // ignore the event if there are multiple protons
       }
-      _hnumPhotons->Fill( hit.NumPhotons());
-      _hEdep->Fill( hit.Energy());   // energy deposit in MeV
-      _hSteplength->Fill( hit.StepLength()); // step length in cm
-      /*
-        _ntuple->Fill(event.event(),
-        hit.GetEdep(),
-        hit.GetEdepEM(),
-        hit.GetEdepnonEM(),
-        hit.GetXpos(),
-        hit.GetYpos(),
-        hit.GetZpos(),
-        hit.GetTime());
-      */
+
+      double e = hit.Energy();
+      double l = hit.StepLength();
+      _hSteplength->Fill(l);
+
+      sumLength += l;
+      dE.push_back(e);
+      dx.push_back(l);
+      l0.push_back(sumLength);
+    } // end a simEnergyDeposit
+
+    double totalLength = l0.back();
+    if (has_reinteraction_proton) continue;
+    for(size_t i=0; i<dE.size(); i++){
+      double res_range = totalLength - l0.at(i);
+      if(res_range>120) std::cout << res_range << " " << dE.at(i)/dx.at(i) << std::endl;
+      _hdEdxRR->Fill(res_range, dE.at(i)/dx.at(i));
+      _hSteplengthRR->Fill(res_range, dx.at(i));
     }
-    _hLandauPhotons->Fill(sumPhotons);
-    _hLandauEdep->Fill(sumE);
-  }
+  } // end simEnergyDeposits
 } // end analyze
 
 DEFINE_ART_MODULE(larg4::CheckSimEnergyDeposit)
